@@ -15,6 +15,8 @@
 
 using namespace std;
 
+int sample_step = 1;
+
 template <typename T>
 void pub_pl_func(T &pl, ros::Publisher &pub)
 {
@@ -79,8 +81,8 @@ void read_file(vector<IMUST> &x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl
   PLV(3) poss; PLM(3) rots;
   vector<double> tims;
   int pose_size = read_pose(tims, rots, poss, prename);
-  
-  for(int m=0; m<pose_size; m++)
+  std::cout << pose_size << " pose in pose file!\n";
+  for(int m=0; m<pose_size; m+=sample_step)
   {
     string filename = prename + "full" + to_string(m) + ".pcd";
 
@@ -114,7 +116,7 @@ void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_
     x_buf[i].R = es0.R.transpose() * x_buf[i].R;
   }
 
-  pcl::PointCloud<PointType> pl_send, pl_path;
+  pcl::PointCloud<PointType> pl_send, pl_path, pcd_full;
   int winsize = x_buf.size();
   for(int i=0; i<winsize; i++)
   {
@@ -122,7 +124,7 @@ void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_
     down_sampling_voxel(pl_tem, 0.05);
     pl_transform(pl_tem, x_buf[i]);
     pl_send += pl_tem;
-
+    pcd_full += pl_tem;
     if((i%200==0 && i!=0) || i == winsize-1)
     {
       pub_pl_func(pl_send, pub_show);
@@ -137,7 +139,8 @@ void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_
     ap.curvature = i;
     pl_path.push_back(ap);
   }
-
+  pcl::PCDWriter pcd_writer;
+  pcd_writer.writeBinary("/home/guo/balm_ws/src/BALM/merged.pcd", pcd_full);
   pub_pl_func(pl_path, pub_path);
 }
 
@@ -155,6 +158,8 @@ int main(int argc, char **argv)
   vector<pcl::PointCloud<PointType>::Ptr> pl_fulls;
 
   n.param<double>("voxel_size", voxel_size, 1);
+  n.param<int>("sample_step", sample_step, 1);
+  std::cout << "sample step: " << sample_step << std::endl;
   string file_path;
   n.param<string>("file_path", file_path, "");
 
