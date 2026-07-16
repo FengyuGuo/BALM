@@ -18,7 +18,7 @@ int win_size = 20;
 
 int merge_enable = 1;
 
-class VOX_HESS
+class VOX_HESS // Look like a class to calculate the Hessian matrix and optimize pose and voxels
 {
 public:
   vector<const PointCluster*> sig_vecs;
@@ -628,24 +628,28 @@ class OCTO_TREE_NODE
 public:
   int octo_state; // 0(unknown), 1(mid node), 2(plane)
   int push_state;
-  int layer;
-  vector<PLV(3)> vec_orig, vec_tran;
-  vector<PointCluster> sig_orig, sig_tran;
+  int layer; // depth of the node
+  vector<PLV(3)> vec_orig, vec_tran; // will resize to win_size
+  vector<PointCluster> sig_orig, sig_tran; // will resize to win_size
   PointCluster fix_point;
   PLV(3) vec_fix;
 
-  OCTO_TREE_NODE *leaves[8];
-  float voxel_center[3];
+  OCTO_TREE_NODE *leaves[8]; // children nodes
+  float voxel_center[3]; // center of the voxel
   float quater_length;
 
   Eigen::Vector3d center, direct, value_vector; // temporal
+  // center, direction? and what?
   double decision, ref;
 
   OCTO_TREE_NODE()
   {
-    octo_state = 0; push_state = 0;
-    vec_orig.resize(win_size); vec_tran.resize(win_size);
-    sig_orig.resize(win_size); sig_tran.resize(win_size);
+    octo_state = 0; // initial state is unknown
+    push_state = 0;
+    vec_orig.resize(win_size);
+    vec_tran.resize(win_size);
+    sig_orig.resize(win_size);
+    sig_tran.resize(win_size);
     for(int i=0; i<8; i++) leaves[i] = nullptr;
     ref = 255.0*rand()/(RAND_MAX + 1.0f);
     layer = 0;
@@ -940,8 +944,8 @@ public:
   OCTO_TREE_ROOT()
   {
     is2opt = true;
-    life = life_span;
-    each_num.resize(win_size);
+    life = life_span; // 1000 for now. what?
+    each_num.resize(win_size); // 20 for now. what?
     for(int i=0; i<win_size; i++) each_num[i] = 0;
   }
 
@@ -1168,41 +1172,57 @@ public:
 };
 
 void cut_voxel(unordered_map<VOXEL_LOC, OCTO_TREE_ROOT*> &feat_map, pcl::PointCloud<PointType> &pl_feat, const IMUST &x_key, int fnum)
+// fnum is a index for win_size
 {
   float loc_xyz[3];
+  // Iterate through all points in the point cloud
   for(PointType &p_c : pl_feat.points)
   {
+    // Keep the point in its sensor frame and transform it into the keyframe/world
+    // frame used to assign points to voxels.
     Eigen::Vector3d pvec_orig(p_c.x, p_c.y, p_c.z);
     Eigen::Vector3d pvec_tran = x_key.R*pvec_orig + x_key.p;
 
     for(int j=0; j<3; j++)
     {
+      // Compute integer voxel coordinates.  Casting truncates toward zero, so
+      // shift negative coordinates first to obtain floor-like behavior.
       loc_xyz[j] = pvec_tran[j] / voxel_size;
       if(loc_xyz[j] < 0) loc_xyz[j] -= 1.0;
     }
 
+    // Use the transformed point's voxel as the map key.
     VOXEL_LOC position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
     auto iter = feat_map.find(position);
     if(iter != feat_map.end())
     {
-      if(iter->second->octo_state != 2)
+      // Store complete point sets unless this voxel has already reached the
+      // corresponding octree state.
+      if(iter->second->octo_state != 2) // 2 for plane
       {
+        // not plane voxel. unknown voxel and mid node voxel
         iter->second->vec_orig[fnum].push_back(pvec_orig);
         iter->second->vec_tran[fnum].push_back(pvec_tran);
       }
       
-      if(iter->second->octo_state != 1)
+      // Maintain the streaming statistics unless they are no longer needed.
+      if(iter->second->octo_state != 1) // 1 for mid node. mid node is a node for mid level node??
       {
+        // not mid node voxel. unknown voxel and plane voxel
         iter->second->sig_orig[fnum].push(pvec_orig);
         iter->second->sig_tran[fnum].push(pvec_tran);
       }
 
+      // Mark the voxel for optimization, refresh its lifetime, and count this
+      // frame's contribution.
       iter->second->is2opt = true;
       iter->second->life = life_span;
       iter->second->each_num[fnum]++;
     }
     else
     {
+      // First point in this spatial cell: initialize a root octree voxel with
+      // both raw/transformed point storage and streaming statistics.
       OCTO_TREE_ROOT *ot = new OCTO_TREE_ROOT();
       ot->vec_orig[fnum].push_back(pvec_orig);
       ot->vec_tran[fnum].push_back(pvec_tran);
@@ -1210,6 +1230,7 @@ void cut_voxel(unordered_map<VOXEL_LOC, OCTO_TREE_ROOT*> &feat_map, pcl::PointCl
       ot->sig_tran[fnum].push(pvec_tran);
       ot->each_num[fnum]++;
 
+      // Derive the root voxel geometry from its integer grid coordinate.
       ot->voxel_center[0] = (0.5+position.x) * voxel_size;
       ot->voxel_center[1] = (0.5+position.y) * voxel_size;
       ot->voxel_center[2] = (0.5+position.z) * voxel_size;
